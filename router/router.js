@@ -25,4 +25,5 @@ router.get('/dev/suriv/hotvirus',C.hotvirus);
 router.get('/dev/suriv/myviruslist',C.myViruslist);
 router.get('/dev/suriv/myspeedlist',C.mySpeedlist);
 router.post('/dev/suriv/speedcomment',C.speedComment);
+router.get('/dev/suriv/virusdetail/:vid',C.getVirusById);
 module.exports = router

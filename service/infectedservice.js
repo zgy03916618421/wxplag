@@ -73,18 +73,15 @@ exports.disfavor = function *(userid,vid) {
     yield mongodb.collection('action').insertOne({'userid':userid,'vid':vid,'action':'skip','createtime':Date.parse(new Date())});
 }
 exports.recharge = function *(money,userid) {
-    yield mongodb.collection('user').updateOne({'openid':userid},{$inc:{'balance':money*10}});
-    var user = yield mongodb.collection('user').find({'openid':userid}).toArray();
+    yield mongodb.collection('user').updateOne({'user_id':userid},{$inc:{'balance':money*10}});
+    var user = yield mongodb.collection('user').findOne({'user_id':userid});
     yield mongodb.collection('deallog').insertOne({'userid':userid,'price':money,'createtime':Date.parse(new Date())});
-    return user[0].balance;
+    return user.balance;
 }
 exports.share = function *(userid) {
     var shareCount = parseInt(yield redisTemplate.get('share'));
     console.log(shareCount);
-    yield mongodb.collection('user').updateOne({'openid':userid},{$inc:{'balance':shareCount}});
-}
-exports.actionLog = function *(vid) {
-
+    yield mongodb.collection('user').updateOne({'user_id':userid},{$inc:{'balance':shareCount}});
 }
 exports.getVirusV2 = function *(userid) {
     var infects = yield mongodb.collection('infected').find({$or: [{infectid: userid}, {carryid: userid}]},{vid:1}).toArray();
@@ -96,40 +93,64 @@ exports.getVirusV2 = function *(userid) {
             {$and: [{speed: false}, {fullfill: {$lt: 4}}]}
         ]}]}
     );
-
     if (!order){
         var data = {'head':{code: 1000,msg:'no virus'}};
         return data
     }else{
        yield mongodb.collection('order').updateOne({'orderid':order.orderid},{$inc:{'fullfill':1}});
-        console.log('1');
+
        yield mongodb.collection('infected').insertOne({'carryid':order.userid,'vid':order.vid,'infectid':userid,'orderid':order.orderid,'createtime':Date.parse(new Date())});
-        console.log('2');
+
         var virus = yield mongodb.collection('virus').findOne({'vid':order.vid});
-        console.log('3');
-        var userinfo = yield mongodb.collection('user').findOne({'openid':virus.userid});
-        console.log('4');
+
+        var userinfo = yield mongodb.collection('user').findOne({'user_id':virus.userid});
+
         //var patients = yield mongodb.collection('infected').find({'vid':order.vid}).toArray();
         var patients = yield mongodb.collection('infected').aggregate([
             {$match:{"vid":order.vid}},
             {$group:{"_id":null,"count":{$sum:1}}}
         ]).toArray();
-        var favor = yield mongodb.collection('action').find({'vid':order.vid,'action':'spread'}).toArray();
-
+        var favor = yield mongodb.collection('action').aggregate([
+            {$match:{"vid":order.vid,"action":"spread"}},
+            {$group:{"_id":null,"count":{$sum:1}}}
+        ]).toArray();
+        var speed = yield mongodb.collection('order').aggregate([
+            {$match:{"vid":order.vid,"speed":true}},
+            {$group:{"_id":null,"count":{$sum:1}}}
+        ]).toArray();
+        //var favor = yield mongodb.collection('action').find({'vid':order.vid,'action':'spread'}).toArray();
         var data ={};
         data.virus = virus;
         data.userinfo = userinfo;
-        data.patientNumber = patients[0].count;
-        data.favorCount = favor.length;
+        if(patients.length){
+            data.virus.scanCount = patients[0].count;
+            data.patientNumber = patients[0].count;
+        }else{
+            data.virus.scanCount = 0;
+            data.patientNumber = 0;
+        }
+        if(favor.length){
+            data.virus.favorCount = favor[0].count;
+            data.favorCount = favor[0].count;
+        }else{
+            data.virus.favorCount = 0;
+            data.favorCount = 0;
+        }
+        if(speed.length){
+            data.virus.speedCount = speed[0].count;
+        }else{
+            data.virus.speedCount = 0
+        }
+        
         return {'head':{code:200,msg:'success'},'data':data};
     }
 }
 exports.speedV4 = function *(vid,userid) {
-    var user = yield mongodb.collection('user').findOne({'openid':userid});
+    var user = yield mongodb.collection('user').findOne({'user_id':userid});
     if(user.balance < 100){
         return {'head':{code:600,msg:'no balance'},'data':{balance:user.balance}};
     }else{
-        mongodb.collection('user').updateOne({'openid':userid},{$inc:{'balance':-100}});
+        mongodb.collection('user').updateOne({'user_id':userid},{$inc:{'balance':-100}});
         var time = Date.parse(new Date());
         var users = yield mongodb.collection('order').find({$and:[{vid:vid},{speed:true},{createtime:{$lt:time}}]},{userid:1}).toArray();
         var us = users.map(function (doc) {
@@ -137,10 +158,10 @@ exports.speedV4 = function *(vid,userid) {
         })
         var source = yield mongodb.collection('virus').findOne({'vid':vid});
         if(us.length){
-            yield mongodb.collection('user').updateMany({'openid':{$in:us}},{$inc:{'income':parseInt(50/(users.length)),'balance':parseInt(50/(users.length))}});
-            yield mongodb.collection('user').updateOne({'openid':source.userid},{$inc:{'income':50,'balance':50}});
+            yield mongodb.collection('user').updateMany({'user_id':{$in:us}},{$inc:{'income':parseInt(50/(users.length)),'balance':parseInt(50/(users.length))}});
+            yield mongodb.collection('user').updateOne({'user_id':source.userid},{$inc:{'income':50,'balance':50}});
         }else{
-            yield mongodb.collection('user').updateOne({'openid':source.userid},{$inc:{'income':100,'balance':100}});
+            yield mongodb.collection('user').updateOne({'user_id':source.userid},{$inc:{'income':100,'balance':100}});
         }
         return {'head':{code: 200,msg:'success'},'data':{balance:user.balance-100}}
     }
@@ -182,14 +203,14 @@ exports.getshareVirus = function *(carryid,vid,userid) {
     var patients = yield mongodb.collection('infected').find({'vid':vid}).toArray();
     var favor = yield mongodb.collection('action').find({'vid':vid,'action':'spread'}).toArray();
     var carry = yield mongodb.collection('user').findOne({'_id':ObjectID.createFromHexString(carryid)})
-    if(carry.openid!=userid){
-        var has = yield mongodb.collection('shareinfected').findOne({'carryid':carry.openid,'vid':vid,'infectid':userid});
+    if(carry.user_id!=userid){
+        var has = yield mongodb.collection('shareinfected').findOne({'carryid':carry.user_id,'vid':vid,'infectid':userid});
         if(!has){   
-            yield mongodb.collection('user').updateOne({'openid':carry.openid},{$inc:{'balance': 100}});
+            yield mongodb.collection('user').updateOne({'user_id':carry.user_id},{$inc:{'balance': 100}});
         }
     }
 
-    mongodb.collection('shareinfected').insertOne({'carryid':carry.openid,'vid':vid,'infectid':userid,'createtime':Date.parse(new Date())});
+    mongodb.collection('shareinfected').insertOne({'carryid':carry.user_id,'vid':vid,'infectid':userid,'createtime':Date.parse(new Date())});
     var data = {};
     data.virus = virus;
     data.userinfo = userinfo;
@@ -226,7 +247,41 @@ exports.hotvirus = function *() {
 }
 exports.getVirusById = function *(vid) {
     var virus = yield mongodb.collection('virus').findOne({'vid':vid});
-    return virus;
+    var user = yield mongodb.collection('user').findOne({'user_id':virus.userid});
+    var patients = yield mongodb.collection('infected').aggregate([
+        {$match:{"vid":vid}},
+        {$group:{"_id":null,"count":{$sum:1}}}
+    ]).toArray();
+    var favor = yield mongodb.collection('action').aggregate([
+        {$match:{"vid":vid,"action":"spread"}},
+        {$group:{"_id":null,"count":{$sum:1}}}
+    ]).toArray();
+    var speed = yield mongodb.collection('order').aggregate([
+        {$match:{"vid":vid,"speed":true}},
+        {$group:{"_id":null,"count":{$sum:1}}}
+    ]).toArray();
+    var data ={};
+    data.virus = virus;
+    data.userinfo = user;
+    if(patients.length){
+        data.virus.scanCount = patients[0].count;
+
+    }else{
+        data.virus.scanCount = 0;
+
+    }
+    if(favor.length){
+        data.virus.favorCount = favor[0].count;
+    }else{
+        data.virus.favorCount = 0;
+    }
+    if(speed.length){
+        data.virus.speedCount = speed[0].count;
+    }else{
+        data.virus.speedCount = 0
+    }
+
+    return {'head':{code:200,msg:'success'},'data':data};
 }
 exports.myViruslist = function *(userid,skip,limit) {
     var virusList = yield mongodb.collection('virus').aggregate([
@@ -245,14 +300,14 @@ exports.myViruslist = function *(userid,skip,limit) {
         }else{
             virusList[i].scanCount = 0;
         }
-        var spread = yield mongodb.collection('action').aggregate([
-            {$match:{'vid':vid,"action":"spread"}},
+        var speed = yield mongodb.collection('order').aggregate([
+            {$match:{'vid':vid,"speed":true}},
             {$group:{'_id':null,"count":{$sum:1}}}
         ]).toArray();
-        if(spread.length){
-            virusList[i].spreadCount = spread[0].count;
+        if(speed.length){
+            virusList[i].speedCount = speed[0].count;
         }else{
-            virusList[i].spreadCount = 0;
+            virusList[i].speedCount = 0;
         }
     }
     return virusList;
@@ -279,16 +334,16 @@ exports.mySpeedlist = function *(userid,skip,limit) {
         }else{
             speedVirus[i].scanCount = 0;
         }
-        var spread = yield mongodb.collection('action').aggregate([
-            {$match:{'vid':vid,"action":"spread"}},
+        var speed = yield mongodb.collection('order').aggregate([
+            {$match:{'vid':vid,"speed":true}},
             {$group:{'_id':null,"count":{$sum:1}}}
         ]).toArray();
-        if(spread.length){
-            speedVirus[i].spreadCount = spread[0].count;
+        if(speed.length){
+            speedVirus[i].speedCount = speed[0].count;
         }else{
-            speedVirus[i].spreadCount = 0;
+            speedVirus[i].speedCount = 0;
         }
-        speedVirus[i].userinfo = yield mongodb.collection('user').findOne({'openid':speedVirus[i].userid});
+        speedVirus[i].userinfo = yield mongodb.collection('user').findOne({'user_id':speedVirus[i].userid});
     }
     return speedVirus;
 }

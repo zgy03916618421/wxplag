@@ -200,3 +200,8 @@ exports.speedComment = function *() {
     yield infectservice.speedComment(userid,vid,comment);
     this.body = {'head':{code:200,msg:'success'}};
 }
+exports.getVirusById = function *() {
+    var vid = this.params.vid;
+    var data = yield infectservice.getVirusById(vid);
+    this.body = data;
+}
